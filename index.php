@@ -57,7 +57,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['encrypt_text'])) {
             } else {
                 $key = generateRandomKey(32);
                 $ivlen = openssl_cipher_iv_length($cipher);
-                $iv = openssl_random_pseudo_bytes($ivlen);
+                $iv = $ivlen > 0 ? openssl_random_pseudo_bytes($ivlen) : '';
                 if (str_contains($cipher, 'gcm')) {
                     $tag = '';
                     $encrypted = openssl_encrypt($text, $cipher, $key, OPENSSL_RAW_DATA, $iv, $tag);
@@ -91,7 +91,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['decrypt_text'])) {
     } else {
         $ciphertext = $_POST['decrypt_text'];
         $cipher = $_POST['algorithm'];
-        $key = str_starts_with($cipher, 'rsa-') ? ($_POST['rsa_key'] ?? '') : ($_POST['aes_key'] ?? '');
+        $key = '';
+
+        if (str_starts_with($cipher, 'rsa-')) {
+            $key = $_POST['rsa_key'] ?? '';
+        } else {
+            $key = $_POST['aes_key'] ?? '';
+        }
 
         if (!in_array($cipher, $allowedCiphers) || $cipher === 'plain-link') {
             $output = 'Unsupported algorithm.';

@@ -6,13 +6,57 @@ function generateRandomKey($length = 32) {
 require_once __DIR__ . '/includes/botblock.inc.php';
 block_if_bot();
 
-function isRateLimited() {
-    session_start();
+//  1. Session based limit
+function isSessionRateLimited($limitSeconds = 2) {
+    if (session_status() === PHP_SESSION_NONE) session_start();
     $now = time();
-    if (isset($_SESSION['last_action']) && $now - $_SESSION['last_action'] < 3) return true;
+    if (isset($_SESSION['last_action']) && $now - $_SESSION['last_action'] < $limitSeconds) {
+        return true;
+    }
     $_SESSION['last_action'] = $now;
     return false;
 }
+
+//  2. IP bassed limit
+function isIpRateLimited($maxRequests = 10, $windowSeconds = 60, $blockDuration = 600) {
+    $ip = $_SERVER['REMOTE_ADDR'];
+    $dir = __DIR__ . '/rate_limit';
+    if (!is_dir($dir)) mkdir($dir, 0700, true);
+
+    $file = "$dir/" . md5($ip) . '.json';
+    $now = time();
+    $data = ['count' => 0, 'first' => $now, 'blocked_until' => 0];
+
+    if (file_exists($file)) {
+        $data = json_decode(file_get_contents($file), true) ?? $data;
+    }
+
+    if ($data['blocked_until'] > $now) {
+        return true;
+    }
+
+    if ($now - $data['first'] > $windowSeconds) {
+        $data['count'] = 1;
+        $data['first'] = $now;
+    } else {
+        $data['count']++;
+    }
+
+    if ($data['count'] > $maxRequests) {
+        $data['blocked_until'] = $now + $blockDuration;
+        file_put_contents($file, json_encode($data));
+        return true;
+    }
+
+    file_put_contents($file, json_encode($data));
+    return false;
+}
+
+//  3. Hybrid (1+2)
+function isHybridRateLimited() {
+    return isSessionRateLimited(2) || isIpRateLimited(10, 60, 600);
+}
+
 
 $allowedCiphers = [
     'plain-link',
@@ -30,7 +74,7 @@ $onetimeLink = '';
 $isPlainLink = false;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['encrypt_text'])) {
-    if (isRateLimited()) {
+    if (isHybridRateLimited()) {
         $output = 'Rate limit exceeded.';
     } else {
         $text = $_POST['encrypt_text'];
@@ -80,7 +124,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['encrypt_text'])) {
                 }
             }
 
-            // 🗂️ 메시지 저장: 경로 분산
+            //  saving messages. distrubted path
             $id = bin2hex(random_bytes(16));
             $subdir = substr($id, 0, 2) . '/' . substr($id, 2, 2);
             $fullPath = __DIR__ . "/messages/$subdir";
@@ -88,6 +132,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['encrypt_text'])) {
             $data = json_encode([
                 'cipher' => $payload,
                 //'key' => $generatedKey,
+                // If you remove the "//" above, the encryption key will be stored in the *.json file. Use with care.
                 'alg' => $algorithmUsed
             ]);
             file_put_contents("$fullPath/{$id}.json", $data);
@@ -97,7 +142,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['encrypt_text'])) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['decrypt_text'])) {
-    if (isRateLimited()) {
+    if (isHybridRateLimited()) {
         $output = 'Rate limit exceeded.';
     } else {
         $ciphertext = $_POST['decrypt_text'];

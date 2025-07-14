@@ -1,15 +1,32 @@
 <?php
 $cli = (php_sapi_name() === 'cli');
 
-// ✅ 삭제 대상 디렉터리
-$dir = __DIR__ . '/messages';
+require_once __DIR__ . '/includes/botblock.inc.php';
+block_if_bot();
+
+$rootDir = __DIR__ . '/messages';
 $now = time();
-$expired = 24 * 60 * 60; // 24시간 기준
+$expired = 24 * 60 * 60;
 $deleted = 0;
 
-foreach (glob($dir . '/*.json') as $file) {
+// 🔍 하위 구조: messages/aa/bb/*.json
+foreach (glob("$rootDir/*/*/*.json") as $file) {
     if (filemtime($file) < ($now - $expired)) {
-        if (unlink($file)) $deleted++;
+        if (unlink($file)) {
+            $deleted++;
+        }
+    }
+}
+
+// 🧹 빈 폴더 정리 (aa/bb 구조)
+foreach (glob("$rootDir/*/*", GLOB_ONLYDIR) as $subdir) {
+    if (count(glob("$subdir/*")) === 0) {
+        rmdir($subdir);
+    }
+}
+foreach (glob("$rootDir/*", GLOB_ONLYDIR) as $prefixDir) {
+    if (count(glob("$prefixDir/*")) === 0) {
+        rmdir($prefixDir);
     }
 }
 
@@ -18,7 +35,7 @@ if ($cli) {
     exit;
 }
 
-// ✅ 브라우저 접근 시 UI로 출력
+// 🌐 웹 접근 차단
 http_response_code(403);
 ?>
 <!DOCTYPE html>
@@ -26,13 +43,11 @@ http_response_code(403);
 <head>
   <meta charset="UTF-8">
   <title>Forbidden - encrypt.zip</title>
-  <!-- Open Graph -->
   <meta property="og:title" content="Encrypt.zip - Forbidden page">
   <meta property="og:description" content="This page is not accessible via web browser.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://encrypt.zip/">
   <meta property="og:image" content="https://encrypt.zip/assets/og-image.png">
-
   <link rel="icon" href="/assets/favicon.png" type="image/png">
   <style>
     body {

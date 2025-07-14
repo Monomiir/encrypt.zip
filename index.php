@@ -2,6 +2,10 @@
 function generateRandomKey($length = 32) {
     return bin2hex(random_bytes($length / 2));
 }
+
+require_once __DIR__ . '/includes/botblock.inc.php';
+block_if_bot();
+
 function isRateLimited() {
     session_start();
     $now = time();
@@ -9,6 +13,7 @@ function isRateLimited() {
     $_SESSION['last_action'] = $now;
     return false;
 }
+
 $allowedCiphers = [
     'plain-link',
     'aes-128-cbc', 'aes-192-cbc', 'aes-256-cbc',
@@ -17,6 +22,7 @@ $allowedCiphers = [
     'aes-128-gcm', 'aes-192-gcm', 'aes-256-gcm',
     'rsa-1024', 'rsa-2048'
 ];
+
 $output = '';
 $generatedKey = '';
 $algorithmUsed = '';
@@ -73,13 +79,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['encrypt_text'])) {
                     $generatedKey = $key;
                 }
             }
-            $id = bin2hex(random_bytes(8));
+
+            // 🗂️ 메시지 저장: 경로 분산
+            $id = bin2hex(random_bytes(16));
+            $subdir = substr($id, 0, 2) . '/' . substr($id, 2, 2);
+            $fullPath = __DIR__ . "/messages/$subdir";
+            if (!is_dir($fullPath)) mkdir($fullPath, 0700, true);
             $data = json_encode([
                 'cipher' => $payload,
-                'key' => $generatedKey,
+                //'key' => $generatedKey,
                 'alg' => $algorithmUsed
             ]);
-            file_put_contents(__DIR__ . "/messages/{$id}.json", $data);
+            file_put_contents("$fullPath/{$id}.json", $data);
             $onetimeLink = "https://encrypt.zip/msg.php?id=" . $id;
         }
     }
@@ -91,13 +102,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['decrypt_text'])) {
     } else {
         $ciphertext = $_POST['decrypt_text'];
         $cipher = $_POST['algorithm'];
-        $key = '';
-
-        if (str_starts_with($cipher, 'rsa-')) {
-            $key = $_POST['rsa_key'] ?? '';
-        } else {
-            $key = $_POST['aes_key'] ?? '';
-        }
+        $key = str_starts_with($cipher, 'rsa-') ? ($_POST['rsa_key'] ?? '') : ($_POST['aes_key'] ?? '');
 
         if (!in_array($cipher, $allowedCiphers) || $cipher === 'plain-link') {
             $output = 'Unsupported algorithm.';
@@ -133,14 +138,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['decrypt_text'])) {
     }
 }
 ?>
+
+<!-- HTML 시작 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>encrypt.zip - Online Text Encrypter</title>
   <link rel="icon" href="/assets/favicon.png" type="image/png">
-
-  <!-- Open Graph -->
   <meta property="og:title" content="encrypt.zip - Online Text Encrypter">
   <meta property="og:description" content="Encrypt messages with AES or RSA and generate secure one-time links">
   <meta property="og:image" content="/assets/og-image.png">
@@ -185,6 +190,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['decrypt_text'])) {
       margin-right: 10px;
       cursor: pointer;
     }
+    #keyField .label,
+    #rsaField .label {
+      margin-top: 5px;
+      display: block;
+    }
     .copyable {
       background: #111;
       border: 1px dashed #888;
@@ -213,15 +223,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['decrypt_text'])) {
       color: #555;
     }
   </style>
+
 </head>
 <body>
   <h1>🔒 encrypt.zip</h1>
 
-  <!-- Encryption Form -->
   <form method="post">
     <div class="label">Encryption</div>
     <textarea name="encrypt_text" rows="5" placeholder="Enter text to encrypt..."></textarea>
-
     <label class="label">Algorithm:</label>
     <select name="algorithm">
       <?php foreach ($allowedCiphers as $alg): ?>
@@ -232,11 +241,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['decrypt_text'])) {
     <button type="reset">Reset</button>
   </form>
 
-  <!-- Decryption Form -->
   <form method="post">
     <div class="label">Decryption</div>
     <textarea name="decrypt_text" rows="5" placeholder="Enter encrypted text..."></textarea>
-
     <label class="label">Algorithm:</label>
     <select name="algorithm" id="dec_algo" onchange="toggleKeyInput(this.value)">
       <?php foreach ($allowedCiphers as $alg): ?>
@@ -245,24 +252,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['decrypt_text'])) {
         <?php endif; ?>
       <?php endforeach; ?>
     </select>
-
-    <!-- AES Key Field -->
     <div id="keyField">
       <label class="label">Decryption Key:</label>
       <input type="text" name="aes_key" id="decrypt_key_input" placeholder="Enter encryption key...">
     </div>
-
-    <!-- RSA Private Key Field -->
     <div id="rsaField" style="display:none;">
       <label class="label">Private Key:</label>
       <textarea name="rsa_key" rows="10" placeholder="Paste RSA private key here..."></textarea>
     </div>
-
     <button type="submit">Decrypt</button>
     <button type="reset">Reset</button>
   </form>
 
-  <!-- Output Area -->
   <?php if (!empty($output)): ?>
     <div class="label">Output:</div>
     <div class="copyable" onclick="copyText(this)"><?= htmlspecialchars($output) ?></div>
@@ -271,6 +272,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['decrypt_text'])) {
   <?php if (!empty($generatedKey)): ?>
     <div class="label">Encryption Key:</div>
     <div class="copyable" onclick="copyText(this)"><?= htmlspecialchars($generatedKey) ?></div>
+    <div class="warning">⚠️ This encryption key is shown only once and will not be saved on the server. Please copy and store it securely.</div>
   <?php endif; ?>
 
   <?php if (!empty($algorithmUsed) && !$isPlainLink): ?>
@@ -281,21 +283,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['decrypt_text'])) {
   <?php if (!empty($onetimeLink)): ?>
     <div class="label">One-time Link:</div>
     <div class="copyable" onclick="copyText(this)"><?= htmlspecialchars($onetimeLink) ?></div>
-    <?php if (!$isPlainLink): ?>
-      <div class="warning">⚠️ This link can only be accessed once. Encryption key is not stored on the server. Save the output securely.</div>
-    <?php endif; ?>
+    <div class="warning">⚠️ This link is valid for a single use only. After it is opened, the message will be deleted permanently.</div>
   <?php endif; ?>
 
-  <footer>
-    Powered by monomiir
-  </footer>
+  <footer>Powered by monomiir</footer>
 
   <script>
     function copyText(el) {
       const copiedSpan = el.querySelector(".copied-msg");
       if (copiedSpan) copiedSpan.remove();
-
-      const text = el.innerText.replace(/\\s*Copied!$/, '');
+      const text = el.innerText.replace(/\s*Copied!$/, '');
       navigator.clipboard.writeText(text).then(() => {
         const span = document.createElement("span");
         span.className = "copied-msg";

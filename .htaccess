@@ -1,9 +1,11 @@
-<FilesMatch "\\.txt$">
-  Require all denied
-</FilesMatch>
-
-<FilesMatch "(\.env|\.git|\.bak|~|\.swp)$">
+<FilesMatch "^\.">
   Require all denied
 </FilesMatch>
 
 Options -Indexes
+
+<IfModule mod_headers.c>
+  <FilesMatch "\.(php|json)$">
+    Header set Cache-Control "no-store, no-cache, must-revalidate"
+  </FilesMatch>
+</IfModule>

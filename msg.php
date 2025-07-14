@@ -4,36 +4,74 @@ session_start();
 require_once __DIR__ . '/includes/botblock.inc.php';
 block_if_bot();
 
+$step = null;
+
+function isIpRateLimited($maxRequests = 10, $windowSeconds = 60, $blockDuration = 600) {
+    $ip = $_SERVER['REMOTE_ADDR'];
+    $dir = __DIR__ . '/rate_limit';
+    if (!is_dir($dir)) mkdir($dir, 0700, true);
+
+    $file = "$dir/" . md5($ip) . '.json';
+    $now = time();
+    $data = ['count' => 0, 'first' => $now, 'blocked_until' => 0];
+
+    if (file_exists($file)) {
+        $data = json_decode(file_get_contents($file), true) ?? $data;
+    }
+
+    if ($data['blocked_until'] > $now) return true;
+
+    if ($now - $data['first'] > $windowSeconds) {
+        $data['count'] = 1;
+        $data['first'] = $now;
+    } else {
+        $data['count']++;
+    }
+
+    if ($data['count'] > $maxRequests) {
+        $data['blocked_until'] = $now + $blockDuration;
+        file_put_contents($file, json_encode($data));
+        return true;
+    }
+
+    file_put_contents($file, json_encode($data));
+    return false;
+}
+
+if (isIpRateLimited()) {
+    http_response_code(429);
+    $step = 'rate_limit';
+}
+
 $id = $_GET['id'] ?? $_POST['id'] ?? null;
 $csrf_token = $_SESSION['csrf'] ?? bin2hex(random_bytes(16));
 $_SESSION['csrf'] = $csrf_token;
 
-$step = '';
 $cipher = '';
 $algorithm = '';
 
-// ID 유효성 확인 및 경로 분리
-if ($id && preg_match('/^[a-f0-9]{32}$/', $id)) {
-    $subdir = substr($id, 0, 2) . '/' . substr($id, 2, 2);
-    $filepath = __DIR__ . "/messages/{$subdir}/{$id}.json";
-} else {
-    $filepath = null;
-}
-
-// 메시지 판단
-if (!$id || !$filepath || !file_exists($filepath)) {
-    $step = '404';
-} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== ($_SESSION['csrf'] ?? '')) {
-        die('Invalid CSRF token.');
+if ($step !== 'rate_limit') {
+    if ($id && preg_match('/^[a-f0-9]{32}$/', $id)) {
+        $subdir = substr($id, 0, 2) . '/' . substr($id, 2, 2);
+        $filepath = __DIR__ . "/messages/{$subdir}/{$id}.json";
+    } else {
+        $filepath = null;
     }
-    $data = json_decode(file_get_contents($filepath), true);
-    unlink($filepath); // 1회성 삭제
-    $cipher = $data['cipher'] ?? '';
-    $algorithm = strtolower($data['alg'] ?? '');
-    $step = 'show';
-} else {
-    $step = 'input';
+
+    if (!$id || !$filepath || !file_exists($filepath)) {
+        $step = '404';
+    } elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== ($_SESSION['csrf'] ?? '')) {
+            die('Invalid CSRF token.');
+        }
+        $data = json_decode(file_get_contents($filepath), true);
+        unlink($filepath);
+        $cipher = $data['cipher'] ?? '';
+        $algorithm = strtolower($data['alg'] ?? '');
+        $step = 'show';
+    } else {
+        $step = 'input';
+    }
 }
 ?>
 
@@ -97,7 +135,11 @@ if (!$id || !$filepath || !file_exists($filepath)) {
 <body>
   <h1>🔒 encrypt.zip</h1>
 
-<?php if ($step === '404'): ?>
+<?php if ($step === 'rate_limit'): ?>
+  <div class="label">429 - Too Many Requests</div>
+  <div class="warning">⚠️ You have exceeded the request limit. Please wait a moment and try again.</div>
+
+<?php elseif ($step === '404'): ?>
   <div class="label">404 - Message Not Found</div>
   <div class="warning">This one-time message has already been accessed or is invalid.</div>
 

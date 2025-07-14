@@ -6,7 +6,7 @@ function generateRandomKey($length = 32) {
 require_once __DIR__ . '/includes/botblock.inc.php';
 block_if_bot();
 
-//  1. Session based limit
+// 1. Session based limit
 function isSessionRateLimited($limitSeconds = 2) {
     if (session_status() === PHP_SESSION_NONE) session_start();
     $now = time();
@@ -17,7 +17,7 @@ function isSessionRateLimited($limitSeconds = 2) {
     return false;
 }
 
-//  2. IP bassed limit
+// 2. IP based limit
 function isIpRateLimited($maxRequests = 10, $windowSeconds = 60, $blockDuration = 600) {
     $ip = $_SERVER['REMOTE_ADDR'];
     $dir = __DIR__ . '/rate_limit';
@@ -31,9 +31,7 @@ function isIpRateLimited($maxRequests = 10, $windowSeconds = 60, $blockDuration 
         $data = json_decode(file_get_contents($file), true) ?? $data;
     }
 
-    if ($data['blocked_until'] > $now) {
-        return true;
-    }
+    if ($data['blocked_until'] > $now) return true;
 
     if ($now - $data['first'] > $windowSeconds) {
         $data['count'] = 1;
@@ -52,11 +50,12 @@ function isIpRateLimited($maxRequests = 10, $windowSeconds = 60, $blockDuration 
     return false;
 }
 
-//  3. Hybrid (1+2)
+// hybrid limit (1+2)
 function isHybridRateLimited() {
     return isSessionRateLimited(2) || isIpRateLimited(10, 60, 600);
 }
 
+$rateLimited = isHybridRateLimited();
 
 $allowedCiphers = [
     'plain-link',
@@ -73,118 +72,107 @@ $algorithmUsed = '';
 $onetimeLink = '';
 $isPlainLink = false;
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['encrypt_text'])) {
-    if (isHybridRateLimited()) {
-        $output = 'Rate limit exceeded.';
+if (!$rateLimited && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['encrypt_text'])) {
+    $text = $_POST['encrypt_text'];
+    $cipher = $_POST['algorithm'];
+
+    if (!in_array($cipher, $allowedCiphers)) {
+        $output = 'Unsupported algorithm.';
+    } elseif (strlen($text) < 1) {
+        $output = 'Text is required.';
     } else {
-        $text = $_POST['encrypt_text'];
-        $cipher = $_POST['algorithm'];
-
-        if (!in_array($cipher, $allowedCiphers)) {
-            $output = 'Unsupported algorithm.';
-        } elseif (strlen($text) < 1) {
-            $output = 'Text is required.';
-        } else {
-            $algorithmUsed = strtoupper($cipher);
-            if ($cipher === 'plain-link') {
-                $payload = $text;
-                $key = '';
-                $isPlainLink = true;
-                $output = '';
-            } elseif (str_starts_with($cipher, 'rsa-')) {
-                $bits = $cipher === 'rsa-2048' ? 2048 : 1024;
-                $res = openssl_pkey_new([
-                    "private_key_bits" => $bits,
-                    "private_key_type" => OPENSSL_KEYTYPE_RSA,
-                ]);
-                openssl_pkey_export($res, $privateKey);
-                $details = openssl_pkey_get_details($res);
-                $publicKey = $details["key"];
-                openssl_public_encrypt($text, $encrypted, $publicKey);
-                $payload = base64_encode($encrypted);
-                $generatedKey = $privateKey;
-                $output = $payload;
-            } else {
-                $key = generateRandomKey(32);
-                $ivlen = openssl_cipher_iv_length($cipher);
-                $iv = $ivlen > 0 ? openssl_random_pseudo_bytes($ivlen) : '';
-                if (str_contains($cipher, 'gcm')) {
-                    $tag = '';
-                    $encrypted = openssl_encrypt($text, $cipher, $key, OPENSSL_RAW_DATA, $iv, $tag);
-                    $payload = base64_encode($iv . "::" . $encrypted . "::" . $tag);
-                } else {
-                    $encrypted = openssl_encrypt($text, $cipher, $key, 0, $iv);
-                    $payload = base64_encode($iv . "::" . $encrypted);
-                }
-                if ($encrypted === false) {
-                    $output = 'Encryption failed.';
-                } else {
-                    $output = $payload;
-                    $generatedKey = $key;
-                }
-            }
-
-            //  saving messages. distrubted path
-            $id = bin2hex(random_bytes(16));
-            $subdir = substr($id, 0, 2) . '/' . substr($id, 2, 2);
-            $fullPath = __DIR__ . "/messages/$subdir";
-            if (!is_dir($fullPath)) mkdir($fullPath, 0700, true);
-            $data = json_encode([
-                'cipher' => $payload,
-                //'key' => $generatedKey,
-                // If you remove the "//" above, the encryption key will be stored in the *.json file. Use with care.
-                'alg' => $algorithmUsed
+        $algorithmUsed = strtoupper($cipher);
+        if ($cipher === 'plain-link') {
+            $payload = $text;
+            $key = '';
+            $isPlainLink = true;
+            $output = '';
+        } elseif (str_starts_with($cipher, 'rsa-')) {
+            $bits = $cipher === 'rsa-2048' ? 2048 : 1024;
+            $res = openssl_pkey_new([
+                "private_key_bits" => $bits,
+                "private_key_type" => OPENSSL_KEYTYPE_RSA,
             ]);
-            file_put_contents("$fullPath/{$id}.json", $data);
-            $onetimeLink = "https://encrypt.zip/msg.php?id=" . $id;
+            openssl_pkey_export($res, $privateKey);
+            $details = openssl_pkey_get_details($res);
+            $publicKey = $details["key"];
+            openssl_public_encrypt($text, $encrypted, $publicKey);
+            $payload = base64_encode($encrypted);
+            $generatedKey = $privateKey;
+            $output = $payload;
+        } else {
+            $key = generateRandomKey(32);
+            $ivlen = openssl_cipher_iv_length($cipher);
+            $iv = $ivlen > 0 ? openssl_random_pseudo_bytes($ivlen) : '';
+            if (str_contains($cipher, 'gcm')) {
+                $tag = '';
+                $encrypted = openssl_encrypt($text, $cipher, $key, OPENSSL_RAW_DATA, $iv, $tag);
+                $payload = base64_encode($iv . "::" . $encrypted . "::" . $tag);
+            } else {
+                $encrypted = openssl_encrypt($text, $cipher, $key, 0, $iv);
+                $payload = base64_encode($iv . "::" . $encrypted);
+            }
+            if ($encrypted === false) {
+                $output = 'Encryption failed.';
+            } else {
+                $output = $payload;
+                $generatedKey = $key;
+            }
         }
+
+        // 저장
+        $id = bin2hex(random_bytes(16));
+        $subdir = substr($id, 0, 2) . '/' . substr($id, 2, 2);
+        $fullPath = __DIR__ . "/messages/$subdir";
+        if (!is_dir($fullPath)) mkdir($fullPath, 0700, true);
+        $data = json_encode([
+            'cipher' => $payload,
+            'alg' => $algorithmUsed
+        ]);
+        file_put_contents("$fullPath/{$id}.json", $data);
+        $onetimeLink = "https://encrypt.zip/msg.php?id=" . $id;
     }
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['decrypt_text'])) {
-    if (isHybridRateLimited()) {
-        $output = 'Rate limit exceeded.';
-    } else {
-        $ciphertext = $_POST['decrypt_text'];
-        $cipher = $_POST['algorithm'];
-        $key = str_starts_with($cipher, 'rsa-') ? ($_POST['rsa_key'] ?? '') : ($_POST['aes_key'] ?? '');
+if (!$rateLimited && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['decrypt_text'])) {
+    $ciphertext = $_POST['decrypt_text'];
+    $cipher = $_POST['algorithm'];
+    $key = str_starts_with($cipher, 'rsa-') ? ($_POST['rsa_key'] ?? '') : ($_POST['aes_key'] ?? '');
 
-        if (!in_array($cipher, $allowedCiphers) || $cipher === 'plain-link') {
-            $output = 'Unsupported algorithm.';
-        } elseif (str_starts_with($cipher, 'rsa-')) {
-            $encrypted = base64_decode($ciphertext);
-            $success = openssl_private_decrypt($encrypted, $decrypted, $key);
-            $output = $success ? $decrypted : 'Decryption failed.';
+    if (!in_array($cipher, $allowedCiphers) || $cipher === 'plain-link') {
+        $output = 'Unsupported algorithm.';
+    } elseif (str_starts_with($cipher, 'rsa-')) {
+        $encrypted = base64_decode($ciphertext);
+        $success = openssl_private_decrypt($encrypted, $decrypted, $key);
+        $output = $success ? $decrypted : 'Decryption failed.';
+    } else {
+        if (strlen($key) < 8) {
+            $output = 'Decryption key must be at least 8 characters.';
         } else {
-            if (strlen($key) < 8) {
-                $output = 'Decryption key must be at least 8 characters.';
-            } else {
-                $decoded = base64_decode($ciphertext);
-                if (str_contains($cipher, 'gcm')) {
-                    $parts = explode("::", $decoded);
-                    if (count($parts) === 3) {
-                        list($iv, $encrypted, $tag) = $parts;
-                        $decrypted = openssl_decrypt($encrypted, $cipher, $key, OPENSSL_RAW_DATA, $iv, $tag);
-                    } else {
-                        $decrypted = false;
-                    }
+            $decoded = base64_decode($ciphertext);
+            if (str_contains($cipher, 'gcm')) {
+                $parts = explode("::", $decoded);
+                if (count($parts) === 3) {
+                    list($iv, $encrypted, $tag) = $parts;
+                    $decrypted = openssl_decrypt($encrypted, $cipher, $key, OPENSSL_RAW_DATA, $iv, $tag);
                 } else {
-                    $parts = explode("::", $decoded);
-                    if (count($parts) === 2) {
-                        list($iv, $encrypted) = $parts;
-                        $decrypted = openssl_decrypt($encrypted, $cipher, $key, 0, $iv);
-                    } else {
-                        $decrypted = false;
-                    }
+                    $decrypted = false;
                 }
-                $output = $decrypted !== false ? $decrypted : 'Decryption failed.';
+            } else {
+                $parts = explode("::", $decoded);
+                if (count($parts) === 2) {
+                    list($iv, $encrypted) = $parts;
+                    $decrypted = openssl_decrypt($encrypted, $cipher, $key, 0, $iv);
+                } else {
+                    $decrypted = false;
+                }
             }
+            $output = $decrypted !== false ? $decrypted : 'Decryption failed.';
         }
     }
 }
 ?>
 
-<!-- HTML 시작 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -268,11 +256,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['decrypt_text'])) {
       color: #555;
     }
   </style>
-
 </head>
 <body>
   <h1>🔒 encrypt.zip</h1>
 
+<?php if ($rateLimited): ?>
+  <div class="label">429 - Too Many Requests</div>
+  <div class="warning">⚠️ You have exceeded the rate limit. Please try again later.</div>
+<?php else: ?>
   <form method="post">
     <div class="label">Encryption</div>
     <textarea name="encrypt_text" rows="5" placeholder="Enter text to encrypt..."></textarea>
@@ -308,28 +299,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['decrypt_text'])) {
     <button type="submit">Decrypt</button>
     <button type="reset">Reset</button>
   </form>
+<?php endif; ?>
 
-  <?php if (!empty($output)): ?>
-    <div class="label">Output:</div>
-    <div class="copyable" onclick="copyText(this)"><?= htmlspecialchars($output) ?></div>
-  <?php endif; ?>
+<?php if (!empty($output)): ?>
+  <div class="label">Output:</div>
+  <div class="copyable" onclick="copyText(this)"><?= htmlspecialchars($output) ?></div>
+<?php endif; ?>
 
-  <?php if (!empty($generatedKey)): ?>
-    <div class="label">Encryption Key:</div>
-    <div class="copyable" onclick="copyText(this)"><?= htmlspecialchars($generatedKey) ?></div>
-    <div class="warning">⚠️ This encryption key is shown only once and will not be saved on the server. Please copy and store it securely.</div>
-  <?php endif; ?>
+<?php if (!empty($generatedKey)): ?>
+  <div class="label">Encryption Key:</div>
+  <div class="copyable" onclick="copyText(this)"><?= htmlspecialchars($generatedKey) ?></div>
+  <div class="warning">⚠️ This encryption key is shown only once and will not be saved on the server. Please copy and store it securely.</div>
+<?php endif; ?>
 
-  <?php if (!empty($algorithmUsed) && !$isPlainLink): ?>
-    <div class="label">Algorithm Used:</div>
-    <div class="copyable"><?= htmlspecialchars($algorithmUsed) ?></div>
-  <?php endif; ?>
+<?php if (!empty($algorithmUsed) && !$isPlainLink): ?>
+  <div class="label">Algorithm Used:</div>
+  <div class="copyable"><?= htmlspecialchars($algorithmUsed) ?></div>
+<?php endif; ?>
 
-  <?php if (!empty($onetimeLink)): ?>
-    <div class="label">One-time Link:</div>
-    <div class="copyable" onclick="copyText(this)"><?= htmlspecialchars($onetimeLink) ?></div>
-    <div class="warning">⚠️ This link is valid for a single use only. After it is opened, the message will be deleted permanently.</div>
-  <?php endif; ?>
+<?php if (!empty($onetimeLink)): ?>
+  <div class="label">One-time Link:</div>
+  <div class="copyable" onclick="copyText(this)"><?= htmlspecialchars($onetimeLink) ?></div>
+  <div class="warning">⚠️ This link is valid for a single use only. After it is opened, the message will be deleted permanently.</div>
+<?php endif; ?>
 
   <footer>Powered by monomiir</footer>
 

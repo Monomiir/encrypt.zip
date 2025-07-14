@@ -1,0 +1,7 @@
+# Block direct access to JSON files
+<FilesMatch "\.json$">
+  Require all denied
+</FilesMatch>
+
+# Disallow directory browsing
+Options -Indexes

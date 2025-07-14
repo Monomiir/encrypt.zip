@@ -1,24 +1,38 @@
 <?php
+session_start();
+
+require_once __DIR__ . '/includes/botblock.inc.php';
+block_if_bot();
+
 $id = $_GET['id'] ?? $_POST['id'] ?? null;
-$filepath = __DIR__ . "/messages/{$id}.json";
+$csrf_token = $_SESSION['csrf'] ?? bin2hex(random_bytes(16));
+$_SESSION['csrf'] = $csrf_token;
+
 $step = '';
 $cipher = '';
-$key = '';
 $algorithm = '';
 
-// 메시지가 존재하지 않으면 즉시 404
-if (!$id || !file_exists($filepath)) {
+// ID 유효성 확인 및 경로 분리
+if ($id && preg_match('/^[a-f0-9]{32}$/', $id)) {
+    $subdir = substr($id, 0, 2) . '/' . substr($id, 2, 2);
+    $filepath = __DIR__ . "/messages/{$subdir}/{$id}.json";
+} else {
+    $filepath = null;
+}
+
+// 메시지 판단
+if (!$id || !$filepath || !file_exists($filepath)) {
     $step = '404';
 } elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // POST 요청 시 메시지 출력 + 삭제
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== ($_SESSION['csrf'] ?? '')) {
+        die('Invalid CSRF token.');
+    }
     $data = json_decode(file_get_contents($filepath), true);
     unlink($filepath); // 1회성 삭제
     $cipher = $data['cipher'] ?? '';
-    $key = $data['key'] ?? '';
-    $algorithm = $data['alg'] ?? '';
+    $algorithm = strtolower($data['alg'] ?? '');
     $step = 'show';
 } else {
-    // 유효한 메시지 + GET 요청 → View 버튼 표시
     $step = 'input';
 }
 ?>
@@ -90,27 +104,22 @@ if (!$id || !file_exists($filepath)) {
 <?php elseif ($step === 'input'): ?>
   <form method="post">
     <input type="hidden" name="id" value="<?= htmlspecialchars($id) ?>">
+    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
     <div class="label">View Encrypted Message</div>
     <button type="submit">View Message</button>
     <div class="warning">This is a one-time link. Clicking this button will reveal the message and delete it.</div>
   </form>
 
 <?php elseif ($step === 'show'): ?>
-  <div class="label">Encrypted Message:</div>
+  <div class="label"><?= $algorithm === 'plain-link' ? 'Plain Message:' : 'Encrypted Message:' ?></div>
   <div class="copyable" data-clip="<?= htmlspecialchars($cipher) ?>"><?= htmlspecialchars($cipher) ?></div>
 
-  <?php if (!empty($key)): ?>
-    <div class="label">Key:</div>
-    <div class="copyable" data-clip="<?= htmlspecialchars($key) ?>"><?= htmlspecialchars($key) ?></div>
-
+  <?php if ($algorithm !== 'plain-link'): ?>
     <div class="label">Algorithm:</div>
-    <div class="copyable" data-clip="<?= htmlspecialchars($algorithm) ?>"><?= htmlspecialchars($algorithm) ?></div>
-
-    <div class="warning">
-      This message will not be shown again. Save the content securely.
-    </div>
+    <div class="copyable" data-clip="<?= htmlspecialchars($algorithm) ?>"><?= htmlspecialchars(strtoupper($algorithm)) ?></div>
+    <div class="warning">This message will not be shown again. Save the content securely.</div>
   <?php else: ?>
-    <div class="warning">This message is not encrypted (plain text link).</div>
+    <div class="warning">This is a plain message. No encryption key was used.</div>
   <?php endif; ?>
 <?php endif; ?>
 

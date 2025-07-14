@@ -1,41 +1,62 @@
 <?php
 $cli = (php_sapi_name() === 'cli');
 
-require_once __DIR__ . '/includes/botblock.inc.php';
-block_if_bot();
+if (!$cli) {
+    require_once __DIR__ . '/includes/botblock.inc.php';
+    block_if_bot();
+}
 
-$rootDir = __DIR__ . '/messages';
+$mode = $argv[1] ?? $_GET['mode'] ?? null;
 $now = time();
-$expired = 24 * 60 * 60;
-$deleted = 0;
 
-// 🔍 하위 구조: messages/aa/bb/*.json
-foreach (glob("$rootDir/*/*/*.json") as $file) {
-    if (filemtime($file) < ($now - $expired)) {
-        if (unlink($file)) {
-            $deleted++;
+// Purge expired messages.
+if ($mode === 'msg') {
+    $rootDir = __DIR__ . '/messages';
+    $expired = 24 * 60 * 60;
+    $deleted = 0;
+
+    foreach (glob("$rootDir/*/*/*.json") as $file) {
+        if (filemtime($file) < ($now - $expired)) {
+            if (unlink($file)) $deleted++;
         }
     }
-}
 
-// 🧹 빈 폴더 정리 (aa/bb 구조)
-foreach (glob("$rootDir/*/*", GLOB_ONLYDIR) as $subdir) {
-    if (count(glob("$subdir/*")) === 0) {
-        rmdir($subdir);
+    // Purge blank directory.
+    foreach (glob("$rootDir/*/*", GLOB_ONLYDIR) as $subdir) {
+        if (count(glob("$subdir/*")) === 0) rmdir($subdir);
+    }
+    foreach (glob("$rootDir/*", GLOB_ONLYDIR) as $prefixDir) {
+        if (count(glob("$prefixDir/*")) === 0) rmdir($prefixDir);
+    }
+
+    if ($cli) {
+        echo "[gc.php] $deleted expired message(s) deleted.\n";
+        exit;
     }
 }
-foreach (glob("$rootDir/*", GLOB_ONLYDIR) as $prefixDir) {
-    if (count(glob("$prefixDir/*")) === 0) {
-        rmdir($prefixDir);
+
+// Purge IP based limitation
+if ($mode === 'rate') {
+    $rateDir = __DIR__ . '/rate_limit';
+    $deleted = 0;
+
+    foreach (glob("$rateDir/*.json") as $file) {
+        $data = json_decode(file_get_contents($file), true);
+        $lastTime = $data['first'] ?? $now;
+        $blockedUntil = $data['blocked_until'] ?? 0;
+
+        if (!$data || ($now - $lastTime > 3600 && $now > $blockedUntil)) {
+            if (unlink($file)) $deleted++;
+        }
+    }
+
+    if ($cli) {
+        echo "[gc.php] $deleted expired rate-limit record(s) deleted.\n";
+        exit;
     }
 }
 
-if ($cli) {
-    echo "[gc.php] $deleted expired message(s) deleted.\n";
-    exit;
-}
-
-// 🌐 웹 접근 차단
+// Blocking web access
 http_response_code(403);
 ?>
 <!DOCTYPE html>

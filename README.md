@@ -6,9 +6,9 @@ encrypt.zip - Online Text Encrypter using AES and RSA base.
 2. Add crontab -e as below
 ```
 #Purge expired messages at 3 o'clock
-0 3 * * * php /data/yourls/data/gc.php msg
+0 3 * * * php /your/data/folder/gc.php msg
 #Deactivate rate limit every 30 minutes
-*/30 * * * * php /data/yourls/data/gc.php rate
+*/30 * * * * php /your/data/folder/gc.php rate
 ```
 3. (Optional) Make directories with permission 0700
 ```
